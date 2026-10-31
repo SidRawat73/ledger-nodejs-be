@@ -467,3 +467,49 @@ A valid JWT is **authentication**. `findOne({ _id, userId: req.user._id })` is *
 **Answer:** Authorization. The JWT proved who you are. It did not prove you own that `userId`.
 
 ---
+
+## Where this API deploys
+
+This repo is a **long-running Node process** (`app.listen`) plus **Mongo**. GitHub is only the source. Deploying means: a host starts `node server.js` 24/7 and talks to Atlas. You do **not** deploy `mongod`. Atlas already is the database.
+
+**Use:** [Render](https://render.com) (or Railway — same shape). New **Web Service** from `SidRawat73/ledger-nodejs-be`. Root: repo root. Start: `node server.js`. Add env vars in the dashboard (`MONGO_URI`, `JWT_SECRET`, …) — never a committed `.env`.
+
+**Do not use:** Vercel / Netlify. Those run **serverless functions** and static files. They are not `listen(8080)`. An Express app with Mongoose sessions and `startTransaction` wants one process, not a lambda per request.
+
+**Why:** Without a process host, `localhost:8080` exists only on your laptop. Postman from a phone cannot reach it. A second student cloning the repo still has no public URL. GitHub Pages cannot run Node.
+
+**When:** You need a URL someone else can `POST`. You do **not** deploy to “finish” the lab — a passing double-click + derived balance on your machine is the product. You do **not** stand up AWS/ECS for one `server.js`. You do **not** deploy `node_modules` or `.env`.
+
+**Where:** Render Web Service ↔ GitHub repo. Mongo stays Atlas (`MONGO_URI`). The listen port must be `process.env.PORT` — Render sets `PORT`. Hardcoded `8080` in `ledger/server.js` will bind the wrong port and the health check dies.
+
+**How:** Push to `main` (already). Render build: `npm install`. Start: `node server.js`. Dashboard env = the keys that were in `.env`. Open `https://<service>.onrender.com/health`. Cookie auth: set cookie `Secure` in production later, or send `Authorization: Bearer` (you already accept both).
+
+**Real world:** A Stripe API process is always up. A Next.js marketing page is Vercel. GPay’s ledger is not a static export. Heroku-style “git push, we run your Procfile” is Render/Railway today.
+
+**Interview question:** Why not deploy this Express app on Vercel?
+
+**Answer:** Vercel is request → function → exit. This app opens a Mongo pool, starts transactions, and `listen`s. That is a web **process**. Put it on Render. Put the DB on Atlas.
+
+---
+
+## Atlas IP whitelist — Render is not your laptop
+
+`MongooseServerSelectionError` / `ReplicaSetNoPrimary` from `/opt/render/...` means **TCP to Atlas never succeeded**. The URI parsed. The replica set names resolved. Atlas then **dropped** the packets because the source IP is not on the Network Access list.
+
+Atlas Network Access is a firewall in front of the cluster. Your home IP was added when Compass / local Node first connected. Render’s machines are **other IPs**, and on the free tier they **change**.
+
+**Why:** Without this list, anyone on the internet who has the URI could try the cluster. With only your home IP, a Render box is a stranger. The error is not a bad schema and not “Mongo is down.”
+
+**When:** Every new *place* that runs Node: laptop, office, Render, a GitHub Action. You add an IP when that place must talk to Atlas. You do **not** add `0.0.0.0/0` on a bank’s production cluster — there you pin the host’s egress IPs or peer a VPC. A student API on Render: `0.0.0.0/0` is the honest choice because Render IPs are not stable.
+
+**Where:** Atlas UI → **Network Access** → **Add IP Address** → **Allow Access from Anywhere** (`0.0.0.0/0`). Not in `db.js`. Not in Render. Cluster → Network Access. Then **Manual Deploy** on Render (or wait for the next crash restart).
+
+**How:** Render process (`/opt/render/project/src`) → `mongoose.connect(process.env.MONGO_URI)` → Atlas `27017` on the shard hosts. Atlas compares the TCP source IP to the list. Miss → selection error, `ReplicaSetNoPrimary`. Hit → `server is connected to DB`. `connectToDB()` is not `await`ed in `server.js`, so you still see `listen` and then `process.exit(1)` from the `.catch`.
+
+**Real world:** A company Wi‑Fi vs coffee-shop Wi‑Fi: Compass fails until you “Add current IP.” AWS security groups are the same idea: default deny, allow listed CIDRs. Render is the coffee shop.
+
+**Interview question:** Local works. Render logs `IP that isn't whitelisted`. Did `MONGO_URI` break?
+
+**Answer:** No. Same cluster, new source IP. Atlas Network Access still has only the laptop. Add `0.0.0.0/0` (or Render’s egress) and restart the web service.
+
+---
